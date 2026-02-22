@@ -29,8 +29,9 @@ type TaskSourceConfig struct {
 }
 
 type TodoistConfig struct {
-	Token string `json:"token"`
-	Label string `json:"label"`
+	Token  string `json:"token"`
+	Label  string `json:"label"`
+	Filter string `json:"filter"`
 }
 
 type AIConfig struct {
@@ -82,7 +83,7 @@ func (c *Config) Validate() error {
 	if c.TaskSource.Todoist.Token == "" {
 		return errors.New("task_source.todoist.token is required")
 	}
-	if c.TaskSource.Todoist.Label == "" {
+	if c.TaskSource.Todoist.Label == "" && c.TaskSource.Todoist.Filter == "" {
 		c.TaskSource.Todoist.Label = "ia:do"
 	}
 	if c.AI.Provider != "codex" {

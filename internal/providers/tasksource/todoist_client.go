@@ -28,8 +28,14 @@ func newTodoistHTTPClient(token string) *todoistHTTPClient {
 	}
 }
 
-func (c *todoistHTTPClient) FetchByLabel(ctx context.Context, label string) ([]todoistTask, error) {
-	u := todoistBaseURL + "/tasks?label=" + url.QueryEscape(label)
+func (c *todoistHTTPClient) FetchTasks(ctx context.Context, label, filter string) ([]todoistTask, error) {
+	params := url.Values{}
+	if strings.TrimSpace(filter) != "" {
+		params.Set("filter", filter)
+	} else {
+		params.Set("label", label)
+	}
+	u := todoistBaseURL + "/tasks?" + params.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err

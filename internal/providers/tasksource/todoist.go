@@ -17,26 +17,28 @@ const (
 
 type TodoistSource struct {
 	label  string
+	filter string
 	client todoistClient
 }
 
 type todoistClient interface {
-	FetchByLabel(context.Context, string) ([]todoistTask, error)
+	FetchTasks(context.Context, string, string) ([]todoistTask, error)
 	CloseTask(context.Context, string) error
 	CommentTask(context.Context, string, string) error
 	UpdateTaskLabels(context.Context, string, []string) error
 }
 
-func NewTodoistSource(token, label string) *TodoistSource {
-	return NewTodoistSourceWithClient(label, newTodoistHTTPClient(token))
+func NewTodoistSource(token, label, filter string) *TodoistSource {
+	return NewTodoistSourceWithClient(label, filter, newTodoistHTTPClient(token))
 }
 
-func NewTodoistSourceWithClient(label string, client todoistClient) *TodoistSource {
-	if label == "" {
+func NewTodoistSourceWithClient(label, filter string, client todoistClient) *TodoistSource {
+	if strings.TrimSpace(label) == "" && strings.TrimSpace(filter) == "" {
 		label = "ia:do"
 	}
 	return &TodoistSource{
 		label: label,
+		filter: filter,
 		client: client,
 	}
 }
@@ -50,7 +52,7 @@ type todoistTask struct {
 }
 
 func (t *TodoistSource) Fetch(ctx context.Context) ([]agent.Task, error) {
-	raw, err := t.client.FetchByLabel(ctx, t.label)
+	raw, err := t.client.FetchTasks(ctx, t.label, t.filter)
 	if err != nil {
 		return nil, err
 	}

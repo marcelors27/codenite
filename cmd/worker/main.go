@@ -26,7 +26,11 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
-	taskSource := tasksource.NewTodoistSource(cfg.TaskSource.Todoist.Token, cfg.TaskSource.Todoist.Label)
+	taskSource := tasksource.NewTodoistSource(
+		cfg.TaskSource.Todoist.Token,
+		cfg.TaskSource.Todoist.Label,
+		cfg.TaskSource.Todoist.Filter,
+	)
 	aiProvider := ai.NewCodexProvider(cfg.AI.Command, cfg.AI.Env)
 	vcsProvider := vcs.NewGitHubProvider(cfg.VCS.GitHub.Token, cfg.Worker.WorkRoot)
 
