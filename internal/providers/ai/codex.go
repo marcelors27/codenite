@@ -30,7 +30,13 @@ func (p *CodexProvider) Develop(ctx context.Context, repoPath, repoFullName stri
 		"TASK_DESCRIPTION=" + task.Description,
 		"TASK_PROMPT=" + prompt,
 	}
-	env = append(env, p.commandEnv()...)
+	commandEnv := p.commandEnv()
+	if !hasEnvKey(commandEnv, "OPENAI_API_KEY") {
+		if key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); key != "" {
+			commandEnv = append(commandEnv, "OPENAI_API_KEY="+key)
+		}
+	}
+	env = append(env, commandEnv...)
 
 	res, err := util.RunCmd(ctx, repoPath, env, "sh", "-lc", p.command)
 	if err != nil {
@@ -61,9 +67,22 @@ func (p *CodexProvider) commandEnv() []string {
 	for _, key := range keys {
 		// Supports values like "${OPENAI_API_KEY}" from deployment environment.
 		value := os.ExpandEnv(strings.TrimSpace(p.env[key]))
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
 		out = append(out, key+"="+value)
 	}
 	return out
+}
+
+func hasEnvKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildPrompt(task agent.Task) string {

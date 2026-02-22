@@ -15,7 +15,7 @@
   },
   "ai": {
     "provider": "codex",
-    "command": "codex run --repo \"$REPO_PATH\" --prompt \"$TASK_PROMPT\"",
+    "command": "codex exec --full-auto \"$TASK_PROMPT\"",
     "env": {
       "OPENAI_API_KEY": "${OPENAI_API_KEY}"
     }
