@@ -1,0 +1,36 @@
+# Binaries
+/bin/
+/dist/
+/out/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go
+/vendor/
+coverage.out
+*.coverprofile
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Env/config secrets
+.env
+.env.*
+!.env.railway.example
+config.json
+
+# Runtime/work dirs
+tmp/
+work/
