@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +25,8 @@ const (
 	maxReadFiles       = 24
 	maxFileBytes       = 120_000
 	maxContextBytes    = 320_000
+	openAITimeout      = 300 * time.Second
+	maxOpenAIRetries   = 4
 )
 
 type CodexProvider struct {
@@ -71,7 +75,7 @@ func NewCodexProvider(model string, env map[string]string) *CodexProvider {
 		model: model,
 		env:   env,
 		client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: openAITimeout,
 		},
 	}
 }
@@ -148,45 +152,95 @@ func (p *CodexProvider) callResponses(ctx context.Context, apiKey, prompt string
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIResponsesURL, bytes.NewReader(reqBody))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4_000_000))
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai responses failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(rawBody)))
-	}
-
-	var parsed openAIResponse
-	if err := json.Unmarshal(rawBody, &parsed); err != nil {
-		return "", err
-	}
-
-	var out strings.Builder
-	for _, item := range parsed.Output {
-		for _, content := range item.Content {
-			if strings.TrimSpace(content.Text) == "" {
-				continue
-			}
-			if out.Len() > 0 {
-				out.WriteString("\n")
-			}
-			out.WriteString(content.Text)
+	var lastErr error
+	for attempt := 1; attempt <= maxOpenAIRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIResponsesURL, bytes.NewReader(reqBody))
+		if err != nil {
+			return "", err
 		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := p.client.Do(req)
+		if err != nil {
+			lastErr = err
+			if !isRetryableOpenAIError(err) || attempt == maxOpenAIRetries {
+				return "", err
+			}
+			sleepWithContext(ctx, retryDelay(attempt))
+			continue
+		}
+
+		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4_000_000))
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("openai responses failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(rawBody)))
+			if !isRetryableOpenAIStatus(resp.StatusCode) || attempt == maxOpenAIRetries {
+				return "", lastErr
+			}
+			sleepWithContext(ctx, retryDelay(attempt))
+			continue
+		}
+
+		var parsed openAIResponse
+		if err := json.Unmarshal(rawBody, &parsed); err != nil {
+			return "", err
+		}
+
+		var out strings.Builder
+		for _, item := range parsed.Output {
+			for _, content := range item.Content {
+				if strings.TrimSpace(content.Text) == "" {
+					continue
+				}
+				if out.Len() > 0 {
+					out.WriteString("\n")
+				}
+				out.WriteString(content.Text)
+			}
+		}
+		if strings.TrimSpace(out.String()) == "" {
+			return "", fmt.Errorf("empty model output")
+		}
+		return out.String(), nil
 	}
-	if strings.TrimSpace(out.String()) == "" {
-		return "", fmt.Errorf("empty model output")
+
+	return "", lastErr
+}
+
+func isRetryableOpenAIStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
+}
+
+func isRetryableOpenAIError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
 	}
-	return out.String(), nil
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+func retryDelay(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return 2 * time.Second
+	case 2:
+		return 5 * time.Second
+	case 3:
+		return 10 * time.Second
+	default:
+		return 15 * time.Second
+	}
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 func listRepoFiles(ctx context.Context, repoPath string) ([]repoFile, error) {
