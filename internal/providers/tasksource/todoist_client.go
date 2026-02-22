@@ -12,7 +12,12 @@ import (
 	"time"
 )
 
-const todoistBaseURL = "https://api.todoist.com/rest/v2"
+const todoistBaseURL = "https://api.todoist.com/api/v1"
+
+type todoistTasksPage struct {
+	Results    []todoistTask `json:"results"`
+	NextCursor string        `json:"next_cursor"`
+}
 
 type todoistHTTPClient struct {
 	token  string
@@ -29,35 +34,59 @@ func newTodoistHTTPClient(token string) *todoistHTTPClient {
 }
 
 func (c *todoistHTTPClient) FetchTasks(ctx context.Context, label, filter string) ([]todoistTask, error) {
+	basePath := "/tasks"
 	params := url.Values{}
+	params.Set("limit", "200")
+
 	if strings.TrimSpace(filter) != "" {
-		params.Set("filter", filter)
+		basePath = "/tasks/filter"
+		params.Set("query", filter)
 	} else {
 		params.Set("label", label)
 	}
-	u := todoistBaseURL + "/tasks?" + params.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	out := make([]todoistTask, 0)
+	cursor := ""
+	for {
+		if cursor == "" {
+			params.Del("cursor")
+		} else {
+			params.Set("cursor", cursor)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("todoist fetch failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		u := todoistBaseURL + basePath + "?" + params.Encode()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+			resp.Body.Close()
+			return nil, fmt.Errorf("todoist fetch failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		var page todoistTasksPage
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		resp.Body.Close()
+
+		out = append(out, page.Results...)
+		if strings.TrimSpace(page.NextCursor) == "" {
+			break
+		}
+		cursor = page.NextCursor
 	}
 
-	var raw []todoistTask
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, err
-	}
-	return raw, nil
+	return out, nil
 }
 
 func (c *todoistHTTPClient) CloseTask(ctx context.Context, taskID string) error {
@@ -74,7 +103,7 @@ func (c *todoistHTTPClient) CloseTask(ctx context.Context, taskID string) error 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("todoist close failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -100,7 +129,7 @@ func (c *todoistHTTPClient) CommentTask(ctx context.Context, taskID, text string
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		resBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("todoist comment failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(resBody)))
 	}
@@ -128,7 +157,7 @@ func (c *todoistHTTPClient) UpdateTaskLabels(ctx context.Context, taskID string,
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		resBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("todoist update labels failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(resBody)))
 	}

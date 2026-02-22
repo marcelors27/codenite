@@ -111,7 +111,7 @@ Isso facilita trocar o provedor de IA depois sem mexer no core do worker.
 Exemplo de `WORKER_CONFIG_JSON`:
 
 ```json
-{"worker":{"poll_interval_seconds":60,"work_root":"/tmp/codenite-work","dry_run":false,"close_task_on_pr":true,"comment_on_task":true},"task_source":{"provider":"todoist","todoist":{"token":"${TODOIST_TOKEN}","label":"ia:do","filter":"@ia:do & #chroma"}},"ai":{"provider":"codex","command":"codex run --repo \"$REPO_PATH\" --prompt \"$TASK_PROMPT\"","env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}"}},"vcs":{"provider":"github","github":{"token":"${GITHUB_TOKEN}","draft":true}},"repositories":{"123456789":{"repo":"marcelors27/chroma-monorepo","base_branch":"main"}}}
+{"worker":{"poll_interval_seconds":60,"work_root":"/tmp/codenite-work","dry_run":false,"close_task_on_pr":true,"comment_on_task":true},"task_source":{"provider":"todoist","todoist":{"token":"${TODOIST_TOKEN}","label":"ia:do","filter":"@ia:do & \u0023chroma"}},"ai":{"provider":"codex","command":"codex run --repo \"$REPO_PATH\" --prompt \"$TASK_PROMPT\"","env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}"}},"vcs":{"provider":"github","github":{"token":"${GITHUB_TOKEN}","draft":true}},"repositories":{"123456789":{"repo":"marcelors27/chroma-monorepo","base_branch":"main"}}}
 ```
 
 Arquivo auxiliar com exemplo de env:
