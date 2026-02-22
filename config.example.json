@@ -10,8 +10,7 @@
     "provider": "todoist",
     "todoist": {
       "token": "TODOIST_TOKEN",
-      "label": "ia:do",
-      "filter": "@ia:do & #chroma"
+      "label": "ia:do"
     }
   },
   "ai": {
