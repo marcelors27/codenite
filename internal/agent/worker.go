@@ -194,65 +194,31 @@ func buildPRBody(task Task) string {
 }
 
 func (w *Worker) commentAIResult(ctx context.Context, taskID string, result AIResult, developErr error) {
-	status := "success"
-	if developErr != nil {
-		status = "failed"
-	}
-
-	header := fmt.Sprintf("AI execution `%s` (exit_code=%d).", status, result.ExitCode)
-	comments := []string{header}
-
-	if strings.TrimSpace(result.Stdout) != "" {
-		comments = append(comments, chunkOutputForComments("AI stdout", result.Stdout)...)
-	}
-	if strings.TrimSpace(result.Stderr) != "" {
-		comments = append(comments, chunkOutputForComments("AI stderr", result.Stderr)...)
-	}
-	if len(comments) == 1 {
-		comments = append(comments, "AI output was empty.")
-	}
-
-	for _, comment := range comments {
-		if err := w.taskSource.Comment(ctx, taskID, comment); err != nil {
-			log.Printf("task %s AI output comment failed: %v", taskID, err)
+	summary := strings.TrimSpace(result.Summary)
+	if summary == "" {
+		if developErr != nil {
+			summary = "Execution failed before producing a summary."
+		} else {
+			summary = "No summary provided."
 		}
 	}
-}
 
-func chunkOutputForComments(title, output string) []string {
-	const maxChunk = 1500
-	text := strings.TrimSpace(output)
-	if text == "" {
-		return nil
-	}
-
-	chunks := splitBySize(text, maxChunk)
-	out := make([]string, 0, len(chunks))
-	for i, chunk := range chunks {
-		out = append(out, fmt.Sprintf("%s (%d/%d):\n```\n%s\n```", title, i+1, len(chunks), chunk))
-	}
-	return out
-}
-
-func splitBySize(s string, size int) []string {
-	if size <= 0 {
-		return []string{s}
-	}
-	if len(s) <= size {
-		return []string{s}
-	}
-
-	parts := make([]string, 0, (len(s)+size-1)/size)
-	for len(s) > size {
-		cut := strings.LastIndexByte(s[:size], '\n')
-		if cut <= 0 {
-			cut = size
+	var body strings.Builder
+	body.WriteString("Summary: ")
+	body.WriteString(summary)
+	body.WriteString("\n")
+	body.WriteString("Files edited:\n")
+	if len(result.ChangedFiles) == 0 {
+		body.WriteString("- (none)")
+	} else {
+		for _, path := range result.ChangedFiles {
+			body.WriteString("- ")
+			body.WriteString(path)
+			body.WriteString("\n")
 		}
-		parts = append(parts, strings.TrimSpace(s[:cut]))
-		s = strings.TrimSpace(s[cut:])
 	}
-	if strings.TrimSpace(s) != "" {
-		parts = append(parts, strings.TrimSpace(s))
+
+	if err := w.taskSource.Comment(ctx, taskID, strings.TrimSpace(body.String())); err != nil {
+		log.Printf("task %s AI output comment failed: %v", taskID, err)
 	}
-	return parts
 }

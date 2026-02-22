@@ -10,7 +10,7 @@ Worker agent em Go que:
 - adiciona label `Coding` ao iniciar e troca para `PR Opened` ao finalizar
 - comenta e fecha a task no Todoist (opcional)
 - evita reprocessamento no polling (ignora tasks com `Coding`/`PR Opened` e não processa o mesmo `task.ID` duas vezes no mesmo processo)
-- salva a saída da IA (`stdout`/`stderr`) em comentários da task (com chunking quando necessário)
+- salva em comentários da task apenas o summary da IA e os paths dos arquivos editados
 
 ## Requisitos
 

@@ -27,6 +27,7 @@ const (
 	maxContextBytes    = 320_000
 	openAITimeout      = 300 * time.Second
 	maxOpenAIRetries   = 4
+	maxOpenAIBodyBytes = 20 * 1024 * 1024
 )
 
 type CodexProvider struct {
@@ -128,10 +129,19 @@ func (p *CodexProvider) Develop(ctx context.Context, repoPath, repoFullName stri
 	}
 
 	stdout := strings.TrimSpace(selectRaw + "\n\n" + editRaw + "\n\nsummary: " + plan.Summary)
+	changedFiles := make([]string, 0, len(plan.Changes))
+	for _, ch := range plan.Changes {
+		if rel, err := sanitizeRelativePath(ch.Path); err == nil {
+			changedFiles = append(changedFiles, rel)
+		}
+	}
+	sort.Strings(changedFiles)
 	return agent.AIResult{
-		Stdout:   stdout,
-		Stderr:   "",
-		ExitCode: 0,
+		Stdout:       stdout,
+		Stderr:       "",
+		ExitCode:     0,
+		Summary:      strings.TrimSpace(plan.Summary),
+		ChangedFiles: changedFiles,
 	}, nil
 }
 
@@ -175,7 +185,10 @@ func (p *CodexProvider) callResponses(ctx context.Context, apiKey, prompt string
 			continue
 		}
 
-		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4_000_000))
+		rawBody, err := readBodyCapped(resp.Body, maxOpenAIBodyBytes)
+		if err != nil {
+			return "", err
+		}
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -189,7 +202,7 @@ func (p *CodexProvider) callResponses(ctx context.Context, apiKey, prompt string
 
 		var parsed openAIResponse
 		if err := json.Unmarshal(rawBody, &parsed); err != nil {
-			return "", err
+			return "", fmt.Errorf("parse openai response json: %w; body_prefix=%q", err, prefixForLog(string(rawBody), 500))
 		}
 
 		var out strings.Builder
@@ -245,6 +258,28 @@ func sleepWithContext(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-timer.C:
 	}
+}
+
+func readBodyCapped(r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return io.ReadAll(r)
+	}
+	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("openai response body too large (> %d bytes)", maxBytes)
+	}
+	return data, nil
+}
+
+func prefixForLog(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func listRepoFiles(ctx context.Context, repoPath string) ([]repoFile, error) {
@@ -403,7 +438,7 @@ func parseChangePlan(raw string) (changePlan, error) {
 	}
 	var out changePlan
 	if err := json.Unmarshal([]byte(jsonText), &out); err != nil {
-		return changePlan{}, err
+		return changePlan{}, fmt.Errorf("%w; json_prefix=%q", err, prefixForLog(jsonText, 500))
 	}
 	return out, nil
 }

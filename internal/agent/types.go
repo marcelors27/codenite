@@ -27,9 +27,11 @@ type AIProvider interface {
 }
 
 type AIResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
+	Stdout      string
+	Stderr      string
+	ExitCode    int
+	Summary     string
+	ChangedFiles []string
 }
 
 type VCSProvider interface {
