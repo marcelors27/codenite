@@ -54,6 +54,10 @@ func (g *GitHubProvider) PrepareRepo(ctx context.Context, repo agent.RepoTarget)
 		}
 	}
 
+	if err := g.syncOriginURL(ctx, repoPath, repo.FullName); err != nil {
+		return "", err
+	}
+
 	if err := g.checkoutBase(ctx, repoPath, repo.BaseBranch); err != nil {
 		return "", err
 	}
@@ -247,4 +251,30 @@ func (g *GitHubProvider) cloneURL(repoFullName string) string {
 		return fmt.Sprintf("https://github.com/%s.git", repoFullName)
 	}
 	return fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", g.token, repoFullName)
+}
+
+func (g *GitHubProvider) syncOriginURL(ctx context.Context, repoPath, repoFullName string) error {
+	target := g.cloneURL(repoFullName)
+
+	currentRes, err := util.RunCmd(ctx, repoPath, nil, "git", "remote", "get-url", "origin")
+	if err != nil {
+		return err
+	}
+	if currentRes.ExitCode != 0 {
+		return fmt.Errorf("git remote get-url failed: %s", strings.TrimSpace(currentRes.Stderr))
+	}
+
+	current := strings.TrimSpace(currentRes.Stdout)
+	if current == target {
+		return nil
+	}
+
+	setRes, err := util.RunCmd(ctx, repoPath, nil, "git", "remote", "set-url", "origin", target)
+	if err != nil {
+		return err
+	}
+	if setRes.ExitCode != 0 {
+		return fmt.Errorf("git remote set-url failed: %s", strings.TrimSpace(setRes.Stderr))
+	}
+	return nil
 }
