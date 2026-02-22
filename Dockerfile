@@ -10,8 +10,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/codenite-worker ./cmd/worker
 
 FROM alpine:3.22 AS runtime
-RUN apk add --no-cache ca-certificates git nodejs npm \
-  && npm install -g @openai/codex
+RUN apk add --no-cache ca-certificates git
 
 RUN addgroup -S app && adduser -S -u 10001 -G app app
 WORKDIR /app

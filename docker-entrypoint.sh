@@ -10,9 +10,4 @@ if [ ! -f "${CONFIG_PATH}" ] && [ -n "${WORKER_CONFIG_JSON:-}" ]; then
   printf '%s' "${WORKER_CONFIG_JSON}" > "${CONFIG_PATH}"
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
-  echo "codex CLI not found in PATH" >&2
-  exit 127
-fi
-
 exec /usr/local/bin/codenite-worker "$@"

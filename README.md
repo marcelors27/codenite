@@ -5,7 +5,7 @@ Worker agent em Go que:
 - lê tasks do Todoist com label configurada (ex: `ia:do`)
 - mapeia cada lista/projeto do Todoist para um repositório GitHub
 - baixa/atualiza o repositório
-- executa um comando de IA (Codex inicialmente) para implementar a task
+- usa a API da OpenAI (modelo Codex) para implementar a task com leitura/edição de arquivos do repositório
 - commit/push e abre PR automaticamente
 - adiciona label `Coding` ao iniciar e troca para `PR Opened` ao finalizar
 - comenta e fecha a task no Todoist (opcional)
@@ -16,7 +16,6 @@ Worker agent em Go que:
 
 - Go 1.26+
 - `git` no PATH
-- `codex` CLI (ou outro comando compatível) no PATH
 - token do Todoist
 - token do GitHub com permissão de `repo`
 
@@ -42,7 +41,7 @@ Crie `config.json`:
   },
   "ai": {
     "provider": "codex",
-    "command": "codex exec --full-auto \"$TASK_PROMPT\"",
+    "model": "gpt-5.2-codex",
     "env": {
       "OPENAI_API_KEY": "${OPENAI_API_KEY}"
     }
@@ -81,20 +80,18 @@ Loop contínuo:
 go run ./cmd/worker -config ./config.json
 ```
 
-## Variáveis disponíveis no comando de IA
+## Como a IA interage com o repositório
 
-- `REPO_PATH`
-- `REPO` (formato `owner/repo`)
-- `TASK_ID`
-- `TASK_TITLE`
-- `TASK_DESCRIPTION`
-- `TASK_PROMPT`
+- o worker lista arquivos versionados do repositório clonado
+- a IA escolhe quais arquivos ler para contexto
+- o worker envia o conteúdo desses arquivos para a IA
+- a IA retorna alterações de arquivos e o worker aplica no filesystem local
 
 ## Autenticação da IA no Railway
 
 - Configure a variável de ambiente `OPENAI_API_KEY` no serviço do Railway.
-- Em `ai.env`, mapeie o nome esperado pelo CLI para `${OPENAI_API_KEY}`.
-- O worker expande `${...}` usando o ambiente do processo no `config.json` (incluindo tokens) e injeta no comando da IA.
+- Em `ai.env`, mapeie `${OPENAI_API_KEY}`.
+- O worker expande `${...}` usando o ambiente do processo no `config.json` (incluindo tokens).
 
 Isso facilita trocar o provedor de IA depois sem mexer no core do worker.
 
@@ -110,7 +107,7 @@ Isso facilita trocar o provedor de IA depois sem mexer no core do worker.
 Exemplo de `WORKER_CONFIG_JSON`:
 
 ```json
-{"worker":{"poll_interval_seconds":60,"work_root":"/tmp/codenite-work","dry_run":false,"close_task_on_pr":true,"comment_on_task":true},"task_source":{"provider":"todoist","todoist":{"token":"${TODOIST_TOKEN}","label":"ia:do"}},"ai":{"provider":"codex","command":"codex exec --full-auto \"$TASK_PROMPT\"","env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}"}},"vcs":{"provider":"github","github":{"token":"${GITHUB_TOKEN}","draft":true}},"repositories":{"123456789":{"repo":"marcelors27/chroma-monorepo","base_branch":"main"}}}
+{"worker":{"poll_interval_seconds":60,"work_root":"/tmp/codenite-work","dry_run":false,"close_task_on_pr":true,"comment_on_task":true},"task_source":{"provider":"todoist","todoist":{"token":"${TODOIST_TOKEN}","label":"ia:do"}},"ai":{"provider":"codex","model":"gpt-5.2-codex","env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}"}},"vcs":{"provider":"github","github":{"token":"${GITHUB_TOKEN}","draft":true}},"repositories":{"123456789":{"repo":"marcelors27/chroma-monorepo","base_branch":"main"}}}
 ```
 
 Arquivo auxiliar com exemplo de env:

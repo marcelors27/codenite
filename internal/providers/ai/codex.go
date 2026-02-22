@@ -1,97 +1,426 @@
 package ai
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"codenite/worker/internal/agent"
 	"codenite/worker/internal/util"
 )
 
+const (
+	openAIResponsesURL = "https://api.openai.com/v1/responses"
+	maxRepoFiles       = 800
+	maxReadFiles       = 24
+	maxFileBytes       = 120_000
+	maxContextBytes    = 320_000
+)
+
 type CodexProvider struct {
-	command string
-	env     map[string]string
+	model  string
+	env    map[string]string
+	client *http.Client
 }
 
-func NewCodexProvider(command string, env map[string]string) *CodexProvider {
-	return &CodexProvider{command: command, env: env}
+type repoFile struct {
+	Path string
+	Size int64
+}
+
+type fileSelection struct {
+	ReadFiles []string `json:"read_files"`
+}
+
+type fileChange struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type changePlan struct {
+	Summary string       `json:"summary"`
+	Changes []fileChange `json:"changes"`
+}
+
+type openAIRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+type openAIResponse struct {
+	Output []struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"output"`
+}
+
+func NewCodexProvider(model string, env map[string]string) *CodexProvider {
+	if strings.TrimSpace(model) == "" {
+		model = "gpt-5.2-codex"
+	}
+	return &CodexProvider{
+		model: model,
+		env:   env,
+		client: &http.Client{
+			Timeout: 120 * time.Second,
+		},
+	}
 }
 
 func (p *CodexProvider) Develop(ctx context.Context, repoPath, repoFullName string, task agent.Task) (agent.AIResult, error) {
-	prompt := buildPrompt(task)
-	env := []string{
-		"REPO_PATH=" + repoPath,
-		"REPO=" + repoFullName,
-		"TASK_ID=" + task.ID,
-		"TASK_TITLE=" + task.Title,
-		"TASK_DESCRIPTION=" + task.Description,
-		"TASK_PROMPT=" + prompt,
+	apiKey := p.openAIKey()
+	if apiKey == "" {
+		return agent.AIResult{ExitCode: 1}, fmt.Errorf("openai api key not configured")
 	}
-	commandEnv := p.commandEnv()
-	if !hasEnvKey(commandEnv, "OPENAI_API_KEY") {
-		if key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); key != "" {
-			commandEnv = append(commandEnv, "OPENAI_API_KEY="+key)
+
+	files, err := listRepoFiles(ctx, repoPath)
+	if err != nil {
+		return agent.AIResult{ExitCode: 1}, fmt.Errorf("list repo files: %w", err)
+	}
+
+	selectPrompt := buildSelectionPrompt(task, repoFullName, files)
+	selectRaw, err := p.callResponses(ctx, apiKey, selectPrompt)
+	if err != nil {
+		return agent.AIResult{ExitCode: 1}, err
+	}
+	selection, err := parseSelection(selectRaw)
+	if err != nil {
+		return agent.AIResult{Stdout: selectRaw, ExitCode: 1}, fmt.Errorf("parse selected files: %w", err)
+	}
+
+	selected := normalizeRequestedFiles(selection.ReadFiles, files)
+	fileContents, err := readSelectedFiles(repoPath, selected)
+	if err != nil {
+		return agent.AIResult{Stdout: selectRaw, ExitCode: 1}, fmt.Errorf("read selected files: %w", err)
+	}
+
+	editPrompt := buildEditPrompt(task, repoFullName, fileContents)
+	editRaw, err := p.callResponses(ctx, apiKey, editPrompt)
+	if err != nil {
+		return agent.AIResult{Stdout: selectRaw, ExitCode: 1}, err
+	}
+	plan, err := parseChangePlan(editRaw)
+	if err != nil {
+		stdout := selectRaw + "\n\n" + editRaw
+		return agent.AIResult{Stdout: stdout, ExitCode: 1}, fmt.Errorf("parse change plan: %w", err)
+	}
+
+	if err := applyChanges(repoPath, plan.Changes); err != nil {
+		stdout := selectRaw + "\n\n" + editRaw
+		return agent.AIResult{Stdout: stdout, ExitCode: 1}, fmt.Errorf("apply changes: %w", err)
+	}
+
+	stdout := strings.TrimSpace(selectRaw + "\n\n" + editRaw + "\n\nsummary: " + plan.Summary)
+	return agent.AIResult{
+		Stdout:   stdout,
+		Stderr:   "",
+		ExitCode: 0,
+	}, nil
+}
+
+func (p *CodexProvider) openAIKey() string {
+	if p.env != nil {
+		if raw, ok := p.env["OPENAI_API_KEY"]; ok {
+			value := strings.TrimSpace(os.ExpandEnv(raw))
+			if value != "" {
+				return value
+			}
 		}
 	}
-	env = append(env, commandEnv...)
+	return strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+}
 
-	res, err := util.RunCmd(ctx, repoPath, env, "sh", "-lc", p.command)
+func (p *CodexProvider) callResponses(ctx context.Context, apiKey, prompt string) (string, error) {
+	reqBody, err := json.Marshal(openAIRequest{
+		Model: p.model,
+		Input: prompt,
+	})
 	if err != nil {
-		return agent.AIResult{ExitCode: -1}, err
+		return "", err
 	}
-	out := agent.AIResult{
-		Stdout:   res.Stdout,
-		Stderr:   res.Stderr,
-		ExitCode: res.ExitCode,
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIResponsesURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4_000_000))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai responses failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(rawBody)))
+	}
+
+	var parsed openAIResponse
+	if err := json.Unmarshal(rawBody, &parsed); err != nil {
+		return "", err
+	}
+
+	var out strings.Builder
+	for _, item := range parsed.Output {
+		for _, content := range item.Content {
+			if strings.TrimSpace(content.Text) == "" {
+				continue
+			}
+			if out.Len() > 0 {
+				out.WriteString("\n")
+			}
+			out.WriteString(content.Text)
+		}
+	}
+	if strings.TrimSpace(out.String()) == "" {
+		return "", fmt.Errorf("empty model output")
+	}
+	return out.String(), nil
+}
+
+func listRepoFiles(ctx context.Context, repoPath string) ([]repoFile, error) {
+	res, err := util.RunCmd(ctx, repoPath, nil, "git", "ls-files")
+	if err != nil {
+		return nil, err
 	}
 	if res.ExitCode != 0 {
-		return out, fmt.Errorf("codex command failed: %s", strings.TrimSpace(res.Stderr))
+		return nil, fmt.Errorf("git ls-files failed: %s", strings.TrimSpace(res.Stderr))
+	}
+
+	lines := strings.Split(res.Stdout, "\n")
+	files := make([]repoFile, 0, len(lines))
+	for _, line := range lines {
+		path := strings.TrimSpace(line)
+		if path == "" {
+			continue
+		}
+		full := filepath.Join(repoPath, path)
+		info, err := os.Stat(full)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.Size() > maxFileBytes {
+			continue
+		}
+		files = append(files, repoFile{Path: path, Size: info.Size()})
+		if len(files) >= maxRepoFiles {
+			break
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
+}
+
+func buildSelectionPrompt(task agent.Task, repoFullName string, files []repoFile) string {
+	var b strings.Builder
+	b.WriteString("You are coding in a Git repository.\n")
+	b.WriteString("Select which files must be read before implementing the task.\n")
+	b.WriteString("Return ONLY JSON with shape: {\"read_files\":[\"path\"]}\n")
+	b.WriteString(fmt.Sprintf("Max %d files.\n\n", maxReadFiles))
+	b.WriteString("Task:\n")
+	b.WriteString("ID: " + task.ID + "\n")
+	b.WriteString("Title: " + task.Title + "\n")
+	if strings.TrimSpace(task.Description) != "" {
+		b.WriteString("Description: " + task.Description + "\n")
+	}
+	b.WriteString("Repo: " + repoFullName + "\n\n")
+	b.WriteString("Available files (path | bytes):\n")
+	for _, f := range files {
+		b.WriteString(fmt.Sprintf("- %s | %d\n", f.Path, f.Size))
+	}
+	return b.String()
+}
+
+func parseSelection(raw string) (fileSelection, error) {
+	jsonText, err := extractJSONObject(raw)
+	if err != nil {
+		return fileSelection{}, err
+	}
+	var out fileSelection
+	if err := json.Unmarshal([]byte(jsonText), &out); err != nil {
+		return fileSelection{}, err
 	}
 	return out, nil
 }
 
-func (p *CodexProvider) commandEnv() []string {
-	if len(p.env) == 0 {
+func normalizeRequestedFiles(requested []string, allowed []repoFile) []string {
+	if len(requested) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(p.env))
-	for k := range p.env {
-		keys = append(keys, k)
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, f := range allowed {
+		allowedSet[f.Path] = struct{}{}
 	}
-	sort.Strings(keys)
 
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		// Supports values like "${OPENAI_API_KEY}" from deployment environment.
-		value := os.ExpandEnv(strings.TrimSpace(p.env[key]))
-		if strings.TrimSpace(value) == "" {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, maxReadFiles)
+	for _, path := range requested {
+		path = filepath.ToSlash(strings.TrimSpace(path))
+		if path == "" {
 			continue
 		}
-		out = append(out, key+"="+value)
+		if _, ok := allowedSet[path]; !ok {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+		if len(out) >= maxReadFiles {
+			break
+		}
 	}
 	return out
 }
 
-func hasEnvKey(env []string, key string) bool {
-	prefix := key + "="
-	for _, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			return true
+func readSelectedFiles(repoPath string, paths []string) (map[string]string, error) {
+	out := make(map[string]string, len(paths))
+	total := 0
+	for _, rel := range paths {
+		full := filepath.Join(repoPath, rel)
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", rel, err)
 		}
+		if len(data) > maxFileBytes {
+			data = data[:maxFileBytes]
+		}
+		if total+len(data) > maxContextBytes {
+			break
+		}
+		total += len(data)
+		out[rel] = string(data)
 	}
-	return false
+	return out, nil
 }
 
-func buildPrompt(task agent.Task) string {
-	text := "Implemente a task no código atual com testes quando fizer sentido.\\n"
-	text += "Task ID: " + task.ID + "\\n"
-	text += "Título: " + task.Title + "\\n"
+func buildEditPrompt(task agent.Task, repoFullName string, files map[string]string) string {
+	var b strings.Builder
+	b.WriteString("Implement the task by editing repository files.\n")
+	b.WriteString("Return ONLY JSON with shape:\n")
+	b.WriteString("{\"summary\":\"short text\",\"changes\":[{\"path\":\"relative/path\",\"content\":\"full file content\"}]}\n")
+	b.WriteString("Rules:\n")
+	b.WriteString("- Use relative paths.\n")
+	b.WriteString("- content must be the complete final content for each file.\n")
+	b.WriteString("- Keep changes minimal and safe.\n")
+	b.WriteString("- Prefer editing provided files. Creating new files is allowed when necessary.\n\n")
+	b.WriteString("Task:\n")
+	b.WriteString("ID: " + task.ID + "\n")
+	b.WriteString("Title: " + task.Title + "\n")
 	if strings.TrimSpace(task.Description) != "" {
-		text += "Descrição: " + task.Description + "\\n"
+		b.WriteString("Description: " + task.Description + "\n")
 	}
-	text += "Faça mudanças pequenas, seguras e prontas para PR."
-	return text
+	b.WriteString("Repo: " + repoFullName + "\n\n")
+	b.WriteString("File contents:\n")
+
+	keys := make([]string, 0, len(files))
+	for k := range files {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, path := range keys {
+		b.WriteString("\n--- FILE: " + path + " ---\n")
+		b.WriteString(files[path])
+		b.WriteString("\n--- END FILE ---\n")
+	}
+	return b.String()
+}
+
+func parseChangePlan(raw string) (changePlan, error) {
+	jsonText, err := extractJSONObject(raw)
+	if err != nil {
+		return changePlan{}, err
+	}
+	var out changePlan
+	if err := json.Unmarshal([]byte(jsonText), &out); err != nil {
+		return changePlan{}, err
+	}
+	return out, nil
+}
+
+func extractJSONObject(text string) (string, error) {
+	start := strings.IndexByte(text, '{')
+	if start < 0 {
+		return "", fmt.Errorf("json object not found")
+	}
+
+	inString := false
+	escape := false
+	depth := 0
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if inString {
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' {
+				escape = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inString = true
+			continue
+		}
+		if ch == '{' {
+			depth++
+			continue
+		}
+		if ch == '}' {
+			depth--
+			if depth == 0 {
+				return text[start : i+1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("unterminated json object")
+}
+
+func applyChanges(repoPath string, changes []fileChange) error {
+	for _, ch := range changes {
+		rel, err := sanitizeRelativePath(ch.Path)
+		if err != nil {
+			return err
+		}
+		full := filepath.Join(repoPath, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, []byte(ch.Content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sanitizeRelativePath(path string) (string, error) {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if path == "" {
+		return "", fmt.Errorf("empty change path")
+	}
+	if strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("absolute path not allowed: %s", path)
+	}
+	clean := filepath.Clean(path)
+	if clean == "." || strings.HasPrefix(clean, "..") {
+		return "", fmt.Errorf("path escapes repo: %s", path)
+	}
+	return clean, nil
 }

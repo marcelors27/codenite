@@ -31,7 +31,7 @@ func main() {
 		cfg.TaskSource.Todoist.Label,
 		cfg.TaskSource.Todoist.Filter,
 	)
-	aiProvider := ai.NewCodexProvider(cfg.AI.Command, cfg.AI.Env)
+	aiProvider := ai.NewCodexProvider(cfg.AI.Model, cfg.AI.Env)
 	vcsProvider := vcs.NewGitHubProvider(cfg.VCS.GitHub.Token, cfg.Worker.WorkRoot)
 
 	worker := agent.NewWorker(cfg, taskSource, aiProvider, vcsProvider)

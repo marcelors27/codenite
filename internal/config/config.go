@@ -36,7 +36,7 @@ type TodoistConfig struct {
 
 type AIConfig struct {
 	Provider string            `json:"provider"`
-	Command  string            `json:"command"`
+	Model    string            `json:"model"`
 	Env      map[string]string `json:"env"`
 }
 
@@ -91,8 +91,8 @@ func (c *Config) Validate() error {
 	if c.AI.Provider != "codex" {
 		return errors.New("ai.provider must be 'codex'")
 	}
-	if c.AI.Command == "" {
-		return errors.New("ai.command is required")
+	if c.AI.Model == "" {
+		c.AI.Model = "gpt-5.2-codex"
 	}
 	if c.VCS.Provider != "github" {
 		return errors.New("vcs.provider must be 'github'")

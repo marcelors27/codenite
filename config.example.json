@@ -15,7 +15,7 @@
   },
   "ai": {
     "provider": "codex",
-    "command": "codex exec --full-auto \"$TASK_PROMPT\"",
+    "model": "gpt-5.2-codex",
     "env": {
       "OPENAI_API_KEY": "${OPENAI_API_KEY}"
     }
