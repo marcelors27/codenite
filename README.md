@@ -95,7 +95,7 @@ go run ./cmd/worker -config ./config.json
 
 - Configure a variável de ambiente `OPENAI_API_KEY` no serviço do Railway.
 - Em `ai.env`, mapeie o nome esperado pelo CLI para `${OPENAI_API_KEY}`.
-- O worker expande `${...}` usando o ambiente do processo e injeta no comando da IA.
+- O worker expande `${...}` usando o ambiente do processo no `config.json` (incluindo tokens) e injeta no comando da IA.
 
 Isso facilita trocar o provedor de IA depois sem mexer no core do worker.
 

@@ -60,8 +60,10 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
+	// Allow config values like "${TODOIST_TOKEN}" to be resolved from process env.
+	expanded := os.ExpandEnv(string(data))
 	cfg := Config{}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := json.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
