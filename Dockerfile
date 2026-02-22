@@ -21,8 +21,8 @@ COPY config.example.json /app/config.example.json
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENV WORKER_CONFIG_PATH=/app/config.json
+ENV WORKER_CONFIG_PATH=/tmp/config.json
 
 USER app
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["-config", "/app/config.json"]
+CMD ["-config", "/tmp/config.json"]
