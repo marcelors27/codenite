@@ -6,7 +6,9 @@ Worker agent em Go que:
 - mapeia cada lista/projeto do Todoist para um repositório GitHub
 - baixa/atualiza o repositório
 - usa a API da OpenAI (modelo Codex) para implementar a task com leitura/edição de arquivos do repositório
+- quando há múltiplas tasks do mesmo repositório no mesmo polling, processa em lote em uma única chamada de IA
 - commit/push e abre PR automaticamente
+- se a task tiver label `@build`, o commit inclui `push-ver:{última_tag}` e `push-build:{último_build+1}`
 - adiciona label `Coding` ao iniciar e troca para `PR Opened` ao finalizar
 - comenta e fecha a task no Todoist (opcional)
 - evita reprocessamento no polling (ignora tasks com `Coding`/`PR Opened` e não processa o mesmo `task.ID` duas vezes no mesmo processo)
