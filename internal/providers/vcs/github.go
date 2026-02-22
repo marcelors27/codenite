@@ -91,6 +91,10 @@ func (g *GitHubProvider) CommitAll(ctx context.Context, repoPath, message string
 		return false, fmt.Errorf("git diff failed: %s", strings.TrimSpace(diffRes.Stderr))
 	}
 
+	if err := g.ensureCommitIdentity(ctx, repoPath); err != nil {
+		return false, err
+	}
+
 	commitRes, err := util.RunCmd(ctx, repoPath, nil, "git", "commit", "-m", message)
 	if err != nil {
 		return false, err
@@ -100,6 +104,51 @@ func (g *GitHubProvider) CommitAll(ctx context.Context, repoPath, message string
 	}
 
 	return true, nil
+}
+
+func (g *GitHubProvider) ensureCommitIdentity(ctx context.Context, repoPath string) error {
+	if name, err := g.gitConfigGet(ctx, repoPath, "user.name"); err != nil {
+		return err
+	} else if strings.TrimSpace(name) == "" {
+		if err := g.gitConfigSet(ctx, repoPath, "user.name", "codenite-bot"); err != nil {
+			return err
+		}
+	}
+
+	if email, err := g.gitConfigGet(ctx, repoPath, "user.email"); err != nil {
+		return err
+	} else if strings.TrimSpace(email) == "" {
+		if err := g.gitConfigSet(ctx, repoPath, "user.email", "codenite-bot@users.noreply.github.com"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (g *GitHubProvider) gitConfigGet(ctx context.Context, repoPath, key string) (string, error) {
+	res, err := util.RunCmd(ctx, repoPath, nil, "git", "config", "--local", "--get", key)
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode == 1 {
+		return "", nil
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("git config get %s failed: %s", key, strings.TrimSpace(res.Stderr))
+	}
+	return strings.TrimSpace(res.Stdout), nil
+}
+
+func (g *GitHubProvider) gitConfigSet(ctx context.Context, repoPath, key, value string) error {
+	res, err := util.RunCmd(ctx, repoPath, nil, "git", "config", "--local", key, value)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("git config set %s failed: %s", key, strings.TrimSpace(res.Stderr))
+	}
+	return nil
 }
 
 func (g *GitHubProvider) Push(ctx context.Context, repoPath, branchName string) error {

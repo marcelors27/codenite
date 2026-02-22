@@ -117,6 +117,10 @@ func (p *CodexProvider) Develop(ctx context.Context, repoPath, repoFullName stri
 		stdout := selectRaw + "\n\n" + editRaw
 		return agent.AIResult{Stdout: stdout, ExitCode: 1}, fmt.Errorf("parse change plan: %w", err)
 	}
+	if len(plan.Changes) == 0 {
+		stdout := selectRaw + "\n\n" + editRaw
+		return agent.AIResult{Stdout: stdout, ExitCode: 1}, fmt.Errorf("ai returned no file changes")
+	}
 
 	if err := applyChanges(repoPath, plan.Changes); err != nil {
 		stdout := selectRaw + "\n\n" + editRaw

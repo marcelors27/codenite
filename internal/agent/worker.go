@@ -55,6 +55,24 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 }
 
 func (w *Worker) processTask(ctx context.Context, task Task) error {
+	markFailed := func() {
+		failedLabels := addLabel(
+			removeLabel(
+				removeLabel(
+					removeLabel(task.Labels, w.cfg.TaskSource.Todoist.Label),
+					"Coding",
+				),
+				"PR Opened",
+			),
+			"Failed",
+		)
+		if err := w.taskSource.UpdateLabels(ctx, task.ID, failedLabels); err != nil {
+			log.Printf("task %s update labels (Failed) failed: %v", task.ID, err)
+			return
+		}
+		task.Labels = failedLabels
+	}
+
 	repoCfg, ok := w.cfg.Repositories[task.ProjectID]
 	if !ok {
 		log.Printf("task %s ignored: project %s not mapped", task.ID, task.ProjectID)
@@ -68,11 +86,13 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 
 	repoPath, err := w.vcs.PrepareRepo(ctx, repo)
 	if err != nil {
+		markFailed()
 		return fmt.Errorf("prepare repo: %w", err)
 	}
 
 	branch := util.BranchName(task.ID, task.Title)
 	if err := w.vcs.CreateBranch(ctx, repoPath, branch, repo.BaseBranch); err != nil {
+		markFailed()
 		return fmt.Errorf("create branch: %w", err)
 	}
 
@@ -81,7 +101,7 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 		return nil
 	}
 
-	codingLabels := addLabel(removeLabel(task.Labels, w.cfg.TaskSource.Todoist.Label), "Coding")
+	codingLabels := addLabel(removeLabel(removeLabel(task.Labels, w.cfg.TaskSource.Todoist.Label), "Failed"), "Coding")
 	if err := w.taskSource.UpdateLabels(ctx, task.ID, codingLabels); err != nil {
 		log.Printf("task %s update labels (Coding) failed: %v", task.ID, err)
 	}
@@ -90,20 +110,23 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 	aiResult, err := w.ai.Develop(ctx, repoPath, repo.FullName, task)
 	w.commentAIResult(ctx, task.ID, aiResult, err)
 	if err != nil {
+		markFailed()
 		return fmt.Errorf("ai develop: %w", err)
 	}
 
 	msg := fmt.Sprintf("feat: implement todoist task %s", task.ID)
 	changed, err := w.vcs.CommitAll(ctx, repoPath, msg)
 	if err != nil {
+		markFailed()
 		return fmt.Errorf("commit changes: %w", err)
 	}
 	if !changed {
-		log.Printf("task %s produced no changes", task.ID)
-		return nil
+		markFailed()
+		return fmt.Errorf("task %s produced no changes", task.ID)
 	}
 
 	if err := w.vcs.Push(ctx, repoPath, branch); err != nil {
+		markFailed()
 		return fmt.Errorf("push branch: %w", err)
 	}
 
@@ -111,6 +134,7 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 	prBody := buildPRBody(task)
 	prURL, err := w.vcs.OpenPullRequest(ctx, repo.FullName, repo.BaseBranch, branch, prTitle, prBody, w.cfg.VCS.GitHub.Draft)
 	if err != nil {
+		markFailed()
 		return fmt.Errorf("open pr: %w", err)
 	}
 
