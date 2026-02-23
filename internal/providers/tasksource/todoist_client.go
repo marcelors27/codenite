@@ -19,6 +19,10 @@ type todoistTasksPage struct {
 	NextCursor string        `json:"next_cursor"`
 }
 
+type todoistCommentsPage struct {
+	Results []todoistComment `json:"results"`
+}
+
 type todoistHTTPClient struct {
 	token  string
 	client *http.Client
@@ -108,6 +112,47 @@ func (c *todoistHTTPClient) CloseTask(ctx context.Context, taskID string) error 
 		return fmt.Errorf("todoist close failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+func (c *todoistHTTPClient) FetchTaskComments(ctx context.Context, taskID string) ([]todoistComment, error) {
+	params := url.Values{}
+	params.Set("task_id", taskID)
+	params.Set("limit", "200")
+
+	u := todoistBaseURL + "/comments?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("todoist fetch comments failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	resBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+
+	var comments []todoistComment
+	if err := json.Unmarshal(resBody, &comments); err == nil {
+		return comments, nil
+	}
+
+	var page todoistCommentsPage
+	if err := json.Unmarshal(resBody, &page); err == nil {
+		return page.Results, nil
+	}
+
+	return nil, fmt.Errorf("todoist fetch comments: unsupported response format")
 }
 
 func (c *todoistHTTPClient) CommentTask(ctx context.Context, taskID, text string) error {

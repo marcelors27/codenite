@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"codenite/worker/internal/config"
@@ -20,6 +18,8 @@ type Worker struct {
 	vcs        VCSProvider
 	seen       map[string]struct{}
 }
+
+const prDoneLabel = "ai:pr-done"
 
 func NewWorker(cfg config.Config, taskSource TaskSource, ai AIProvider, vcs VCSProvider) *Worker {
 	return &Worker{
@@ -39,47 +39,126 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 
 	if len(tasks) == 0 {
 		log.Println("no tasks found")
+	} else {
+		batches := map[string][]Task{}
+		for _, task := range tasks {
+			if _, ok := w.seen[task.ID]; ok {
+				log.Printf("task %s skipped: already processed in this worker session", task.ID)
+				continue
+			}
+			w.seen[task.ID] = struct{}{}
+
+			repoCfg, ok := w.cfg.Repositories[task.ProjectID]
+			if !ok {
+				log.Printf("task %s ignored: project %s not mapped", task.ID, task.ProjectID)
+				continue
+			}
+			base := repoCfg.BaseBranch
+			if base == "" {
+				base = "main"
+			}
+			key := repoCfg.Repo + "|" + base
+			batches[key] = append(batches[key], task)
+		}
+
+		if len(batches) == 0 {
+			log.Println("no mapped tasks found")
+		} else {
+			keys := make([]string, 0, len(batches))
+			for key := range batches {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+
+			for _, key := range keys {
+				parts := strings.SplitN(key, "|", 2)
+				repo := RepoTarget{FullName: parts[0], BaseBranch: parts[1]}
+				group := batches[key]
+				if err := w.processTaskBatch(ctx, repo, group); err != nil {
+					log.Printf("tasks %s failed: %v", joinTaskIDs(group), err)
+				}
+			}
+		}
+	}
+
+	if err := w.closeMergedPRTasks(ctx); err != nil {
+		return fmt.Errorf("close merged pr tasks: %w", err)
+	}
+
+	return nil
+}
+
+func (w *Worker) closeMergedPRTasks(ctx context.Context) error {
+	tasks, err := w.taskSource.FetchByLabel(ctx, prDoneLabel)
+	if err != nil {
+		return err
+	}
+	if len(tasks) == 0 {
 		return nil
 	}
 
-	batches := map[string][]Task{}
 	for _, task := range tasks {
-		if _, ok := w.seen[task.ID]; ok {
-			log.Printf("task %s skipped: already processed in this worker session", task.ID)
+		prURL, err := w.taskSource.FindPRURL(ctx, task.ID)
+		if err != nil {
+			log.Printf("task %s pr url lookup failed: %v", task.ID, err)
 			continue
 		}
-		w.seen[task.ID] = struct{}{}
+		if strings.TrimSpace(prURL) == "" {
+			continue
+		}
+
+		merged, err := w.vcs.IsPullRequestMerged(ctx, prURL)
+		if err != nil {
+			log.Printf("task %s pr merged check failed: %v", task.ID, err)
+			continue
+		}
+		if !merged {
+			continue
+		}
 
 		repoCfg, ok := w.cfg.Repositories[task.ProjectID]
 		if !ok {
-			log.Printf("task %s ignored: project %s not mapped", task.ID, task.ProjectID)
+			log.Printf("task %s close skipped: project %s not mapped", task.ID, task.ProjectID)
 			continue
 		}
 		base := repoCfg.BaseBranch
 		if base == "" {
 			base = "main"
 		}
-		key := repoCfg.Repo + "|" + base
-		batches[key] = append(batches[key], task)
-	}
+		repo := RepoTarget{FullName: repoCfg.Repo, BaseBranch: base}
 
-	if len(batches) == 0 {
-		log.Println("no mapped tasks found")
-		return nil
-	}
+		repoPath, err := w.vcs.PrepareRepo(ctx, repo)
+		if err != nil {
+			log.Printf("task %s close skipped: prepare repo failed: %v", task.ID, err)
+			continue
+		}
 
-	keys := make([]string, 0, len(batches))
-	for key := range batches {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+		versionTag, err := computeLatestTag(ctx, repoPath)
+		if err != nil {
+			log.Printf("task %s close skipped: latest tag failed: %v", task.ID, err)
+			continue
+		}
 
-	for _, key := range keys {
-		parts := strings.SplitN(key, "|", 2)
-		repo := RepoTarget{FullName: parts[0], BaseBranch: parts[1]}
-		group := batches[key]
-		if err := w.processTaskBatch(ctx, repo, group); err != nil {
-			log.Printf("tasks %s failed: %v", joinTaskIDs(group), err)
+		commitMsg := fmt.Sprintf("chore: finalize task %s push-ver:%s", task.ID, versionTag)
+		if err := w.vcs.CreateEmptyCommit(ctx, repoPath, commitMsg); err != nil {
+			log.Printf("task %s close skipped: empty commit failed: %v", task.ID, err)
+			continue
+		}
+		if err := w.vcs.Push(ctx, repoPath, repo.BaseBranch); err != nil {
+			log.Printf("task %s close skipped: push base failed: %v", task.ID, err)
+			continue
+		}
+
+		if w.cfg.Worker.CommentOnTask {
+			comment := fmt.Sprintf("Task closed automatically: PR merged (%s)\nEmpty commit: %s", prURL, commitMsg)
+			if err := w.taskSource.Comment(ctx, task.ID, comment); err != nil {
+				log.Printf("task %s close comment failed: %v", task.ID, err)
+			}
+		}
+
+		if err := w.taskSource.Close(ctx, task.ID); err != nil {
+			log.Printf("task %s close after merge failed: %v", task.ID, err)
+			continue
 		}
 	}
 
@@ -152,11 +231,11 @@ func (w *Worker) processTaskBatch(ctx context.Context, repo RepoTarget, tasks []
 
 	msg := fmt.Sprintf("feat: implement %d todoist tasks (%s)", len(tasks), joinTaskIDs(tasks))
 	if hasLabelInBatch(tasks, "@build") {
-		versionTag, nextBuild, metaErr := computeBuildMetadata(ctx, repoPath)
+		versionTag, metaErr := computeLatestTag(ctx, repoPath)
 		if metaErr != nil {
 			log.Printf("tasks %s build metadata failed: %v", joinTaskIDs(tasks), metaErr)
 		} else {
-			msg = fmt.Sprintf("%s push-ver:%s push-build:%d", msg, versionTag, nextBuild)
+			msg = fmt.Sprintf("%s push-ver:%s", msg, versionTag)
 		}
 	}
 	changed, err := w.vcs.CommitAll(ctx, repoPath, msg)
@@ -308,37 +387,27 @@ func hasLabelInBatch(tasks []Task, label string) bool {
 	return false
 }
 
-func computeBuildMetadata(ctx context.Context, repoPath string) (string, int, error) {
-	// Refresh tags to compute build metadata against latest remote state.
+func computeLatestTag(ctx context.Context, repoPath string) (string, error) {
+	// Refresh tags to compute metadata against latest remote state.
 	if fetchRes, err := util.RunCmd(ctx, repoPath, nil, "git", "fetch", "--tags", "--force", "origin"); err != nil {
-		return "", 0, err
+		return "", err
 	} else if fetchRes.ExitCode != 0 {
-		return "", 0, fmt.Errorf("git fetch tags failed: %s", strings.TrimSpace(fetchRes.Stderr))
+		return "", fmt.Errorf("git fetch tags failed: %s", strings.TrimSpace(fetchRes.Stderr))
 	}
 
 	latestTagRes, err := util.RunCmd(ctx, repoPath, nil, "git", "tag", "--sort=-v:refname")
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
 	if latestTagRes.ExitCode != 0 {
-		return "", 0, fmt.Errorf("git tag latest failed: %s", strings.TrimSpace(latestTagRes.Stderr))
-	}
-
-	allTagsRes, err := util.RunCmd(ctx, repoPath, nil, "git", "tag", "--list")
-	if err != nil {
-		return "", 0, err
-	}
-	if allTagsRes.ExitCode != 0 {
-		return "", 0, fmt.Errorf("git tag list failed: %s", strings.TrimSpace(allTagsRes.Stderr))
+		return "", fmt.Errorf("git tag latest failed: %s", strings.TrimSpace(latestTagRes.Stderr))
 	}
 
 	latestTag := "none"
 	if line := firstNonEmptyLine(latestTagRes.Stdout); line != "" {
 		latestTag = line
 	}
-
-	lastBuild := highestBuildFromTags(allTagsRes.Stdout)
-	return latestTag, lastBuild + 1, nil
+	return latestTag, nil
 }
 
 func firstNonEmptyLine(s string) string {
@@ -349,37 +418,6 @@ func firstNonEmptyLine(s string) string {
 		}
 	}
 	return ""
-}
-
-func highestBuildFromTags(tagsRaw string) int {
-	lines := strings.Split(tagsRaw, "\n")
-	maxBuild := 0
-
-	reBuild := regexp.MustCompile(`(?i)build[-_]?([0-9]+)`)
-	reTrailing := regexp.MustCompile(`([0-9]+)$`)
-
-	for _, tag := range lines {
-		tag = strings.TrimSpace(tag)
-		if tag == "" {
-			continue
-		}
-		build := 0
-
-		if m := reBuild.FindStringSubmatch(tag); len(m) == 2 {
-			if n, err := strconv.Atoi(m[1]); err == nil {
-				build = n
-			}
-		} else if m := reTrailing.FindStringSubmatch(tag); len(m) == 2 {
-			if n, err := strconv.Atoi(m[1]); err == nil {
-				build = n
-			}
-		}
-
-		if build > maxBuild {
-			maxBuild = build
-		}
-	}
-	return maxBuild
 }
 
 func (w *Worker) commentAIResult(ctx context.Context, taskID string, result AIResult, developErr error) {

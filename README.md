@@ -8,10 +8,12 @@ Worker agent em Go que:
 - usa a API da OpenAI (modelo Codex) para implementar a task com leitura/edição de arquivos do repositório
 - quando há múltiplas tasks do mesmo repositório no mesmo polling, processa em lote em uma única chamada de IA
 - commit/push e abre PR automaticamente
-- se a task tiver label `@build`, o commit inclui `push-ver:{última_tag}` e `push-build:{último_build+1}`
+- se a task tiver label `@build`, o commit inclui `push-ver:{última_tag}`
 - valida que o PR foi criado no GitHub
 - adiciona label `ai:coding` ao iniciar e troca para `ai:pr-done` ao finalizar
 - comenta as tasks relacionadas no Todoist
+- quando o PR é mergeado, fecha automaticamente a task no Todoist
+- ao fechar a task por PR mergeado, cria um commit vazio no branch base com `push-ver:{última_tag}`
 - evita reprocessamento no polling (ignora tasks com `ai:coding`/`ai:pr-done` e não processa o mesmo `task.ID` duas vezes no mesmo processo)
 - salva em comentários da task apenas o summary da IA e os paths dos arquivos editados
 

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -109,6 +111,21 @@ func (g *GitHubProvider) CommitAll(ctx context.Context, repoPath, message string
 	}
 
 	return true, nil
+}
+
+func (g *GitHubProvider) CreateEmptyCommit(ctx context.Context, repoPath, message string) error {
+	if err := g.ensureCommitIdentity(ctx, repoPath); err != nil {
+		return err
+	}
+
+	commitRes, err := util.RunCmd(ctx, repoPath, nil, "git", "commit", "--allow-empty", "-m", message)
+	if err != nil {
+		return err
+	}
+	if commitRes.ExitCode != 0 {
+		return fmt.Errorf("git empty commit failed: %s", strings.TrimSpace(commitRes.Stderr))
+	}
+	return nil
 }
 
 func (g *GitHubProvider) ensureCommitIdentity(ctx context.Context, repoPath string) error {
@@ -220,6 +237,41 @@ func (g *GitHubProvider) OpenPullRequest(ctx context.Context, repoFullName, base
 	return parsed.HTMLURL, nil
 }
 
+func (g *GitHubProvider) IsPullRequestMerged(ctx context.Context, prURL string) (bool, error) {
+	repoFullName, number, err := parsePullRequestURL(prURL)
+	if err != nil {
+		return false, err
+	}
+
+	u := fmt.Sprintf("%s/repos/%s/pulls/%d", githubAPIBase, repoFullName, number)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		resBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return false, fmt.Errorf("github get pr failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(resBody)))
+	}
+
+	var parsed struct {
+		Merged bool `json:"merged"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return false, err
+	}
+	return parsed.Merged, nil
+}
+
 func (g *GitHubProvider) validatePullRequest(ctx context.Context, repoFullName string, number int) error {
 	u := fmt.Sprintf("%s/repos/%s/pulls/%s", githubAPIBase, repoFullName, strconv.Itoa(number))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -322,4 +374,26 @@ func (g *GitHubProvider) syncOriginURL(ctx context.Context, repoPath, repoFullNa
 		return fmt.Errorf("git remote set-url failed: %s", strings.TrimSpace(setRes.Stderr))
 	}
 	return nil
+}
+
+func parsePullRequestURL(raw string) (string, int, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid pr url: %w", err)
+	}
+	if !strings.EqualFold(u.Host, "github.com") {
+		return "", 0, fmt.Errorf("unsupported pr host: %s", u.Host)
+	}
+
+	re := regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/([0-9]+)(/.*)?$`)
+	m := re.FindStringSubmatch(u.Path)
+	if len(m) != 5 {
+		return "", 0, fmt.Errorf("invalid github pr path: %s", u.Path)
+	}
+
+	number, err := strconv.Atoi(m[3])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid github pr number: %w", err)
+	}
+	return m[1] + "/" + m[2], number, nil
 }

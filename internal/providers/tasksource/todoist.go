@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,7 @@ type TodoistSource struct {
 
 type todoistClient interface {
 	FetchTasks(context.Context, string, string) ([]todoistTask, error)
+	FetchTaskComments(context.Context, string) ([]todoistComment, error)
 	CloseTask(context.Context, string) error
 	CommentTask(context.Context, string, string) error
 	UpdateTaskLabels(context.Context, string, []string) error
@@ -51,6 +53,10 @@ type todoistTask struct {
 	ProjectID   any      `json:"project_id"`
 }
 
+type todoistComment struct {
+	Content string `json:"content"`
+}
+
 func (t *TodoistSource) Fetch(ctx context.Context) ([]agent.Task, error) {
 	raw, err := t.client.FetchTasks(ctx, t.label, t.filter)
 	if err != nil {
@@ -77,8 +83,43 @@ func (t *TodoistSource) Close(ctx context.Context, taskID string) error {
 	return t.client.CloseTask(ctx, taskID)
 }
 
+func (t *TodoistSource) FetchByLabel(ctx context.Context, label string) ([]agent.Task, error) {
+	raw, err := t.client.FetchTasks(ctx, label, "")
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]agent.Task, 0, len(raw))
+	for _, task := range raw {
+		out = append(out, agent.Task{
+			ID:          anyToString(task.ID),
+			Title:       strings.TrimSpace(task.Content),
+			Description: strings.TrimSpace(task.Description),
+			Labels:      task.Labels,
+			ProjectID:   anyToString(task.ProjectID),
+		})
+	}
+	return out, nil
+}
+
 func (t *TodoistSource) Comment(ctx context.Context, taskID, text string) error {
 	return t.client.CommentTask(ctx, taskID, text)
+}
+
+func (t *TodoistSource) FindPRURL(ctx context.Context, taskID string) (string, error) {
+	comments, err := t.client.FetchTaskComments(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+
+	re := regexp.MustCompile(`https://github\.com/[^\s]+/pull/[0-9]+`)
+	for i := len(comments) - 1; i >= 0; i-- {
+		match := re.FindString(strings.TrimSpace(comments[i].Content))
+		if match != "" {
+			return match, nil
+		}
+	}
+	return "", nil
 }
 
 func (t *TodoistSource) UpdateLabels(ctx context.Context, taskID string, labels []string) error {

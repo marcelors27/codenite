@@ -17,8 +17,10 @@ type RepoTarget struct {
 
 type TaskSource interface {
 	Fetch(context.Context) ([]Task, error)
+	FetchByLabel(context.Context, string) ([]Task, error)
 	Close(context.Context, string) error
 	Comment(context.Context, string, string) error
+	FindPRURL(context.Context, string) (string, error)
 	UpdateLabels(context.Context, string, []string) error
 }
 
@@ -38,6 +40,8 @@ type VCSProvider interface {
 	PrepareRepo(ctx context.Context, repo RepoTarget) (string, error)
 	CreateBranch(ctx context.Context, repoPath, branchName, baseBranch string) error
 	CommitAll(ctx context.Context, repoPath, message string) (bool, error)
+	CreateEmptyCommit(ctx context.Context, repoPath, message string) error
 	Push(ctx context.Context, repoPath, branchName string) error
 	OpenPullRequest(ctx context.Context, repoFullName, base, head, title, body string, draft bool) (string, error)
+	IsPullRequestMerged(ctx context.Context, prURL string) (bool, error)
 }
