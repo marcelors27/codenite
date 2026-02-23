@@ -11,7 +11,7 @@ Worker agent em Go que:
 - se a task tiver label `@build`, o commit inclui `push-ver:{última_tag}` e `push-build:{último_build+1}`
 - valida que o PR foi criado no GitHub
 - adiciona label `ai:coding` ao iniciar e troca para `ai:pr-done` ao finalizar
-- comenta e fecha as tasks relacionadas no Todoist
+- comenta as tasks relacionadas no Todoist
 - evita reprocessamento no polling (ignora tasks com `ai:coding`/`ai:pr-done` e não processa o mesmo `task.ID` duas vezes no mesmo processo)
 - salva em comentários da task apenas o summary da IA e os paths dos arquivos editados
 

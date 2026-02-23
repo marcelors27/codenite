@@ -195,10 +195,6 @@ func (w *Worker) processTaskBatch(ctx context.Context, repo RepoTarget, tasks []
 				log.Printf("task %s comment failed: %v", tasks[i].ID, err)
 			}
 		}
-
-		if err := w.taskSource.Close(ctx, tasks[i].ID); err != nil {
-			log.Printf("task %s close failed: %v", tasks[i].ID, err)
-		}
 	}
 
 	log.Printf("tasks %s completed PR=%s", joinTaskIDs(tasks), prURL)
