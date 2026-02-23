@@ -190,7 +190,11 @@ func (w *Worker) processTaskBatch(ctx context.Context, repo RepoTarget, tasks []
 		tasks[i].Labels = finalLabels
 
 		if w.cfg.Worker.CommentOnTask {
-			comment := fmt.Sprintf("PR created: %s", prURL)
+			summary := strings.TrimSpace(aiResult.Summary)
+			if summary == "" {
+				summary = "No summary provided."
+			}
+			comment := fmt.Sprintf("PR created: %s\nSummary: %s", prURL, summary)
 			if err := w.taskSource.Comment(ctx, tasks[i].ID, comment); err != nil {
 				log.Printf("task %s comment failed: %v", tasks[i].ID, err)
 			}
