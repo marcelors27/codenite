@@ -13,7 +13,7 @@ Worker agent em Go que:
 - adiciona label `ai:coding` ao iniciar e troca para `ai:pr-done` ao finalizar
 - comenta as tasks relacionadas no Todoist
 - quando o PR é mergeado, fecha automaticamente a task no Todoist
-- ao fechar a task por PR mergeado, cria um commit vazio no branch base com `push-ver:{última_tag}`
+- ao fechar a task por PR mergeado, cria um commit vazio no branch base com `push-ver:{versão_sem_build}` (ex: `0.0.0`)
 - evita reprocessamento no polling (ignora tasks com `ai:coding`/`ai:pr-done` e não processa o mesmo `task.ID` duas vezes no mesmo processo)
 - salva em comentários da task apenas o summary da IA e os paths dos arquivos editados
 

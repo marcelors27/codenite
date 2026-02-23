@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -139,7 +140,8 @@ func (w *Worker) closeMergedPRTasks(ctx context.Context) error {
 			continue
 		}
 
-		commitMsg := fmt.Sprintf("chore: finalize task %s push-ver:%s", task.ID, versionTag)
+		versionOnly := versionFromTag(versionTag)
+		commitMsg := fmt.Sprintf("chore: finalize task %s push-ver:%s", task.ID, versionOnly)
 		if err := w.vcs.CreateEmptyCommit(ctx, repoPath, commitMsg); err != nil {
 			log.Printf("task %s close skipped: empty commit failed: %v", task.ID, err)
 			continue
@@ -418,6 +420,20 @@ func firstNonEmptyLine(s string) string {
 		}
 	}
 	return ""
+}
+
+func versionFromTag(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" || strings.EqualFold(tag, "none") {
+		return "0.0.0"
+	}
+
+	// Extract SemVer-like core (major.minor.patch), ignoring prefixes/suffixes (e.g. v1.2.3-build.4).
+	re := regexp.MustCompile(`(?i)(?:^|[^0-9])v?([0-9]+\.[0-9]+\.[0-9]+)(?:[^0-9]|$)`)
+	if m := re.FindStringSubmatch(tag); len(m) == 2 {
+		return m[1]
+	}
+	return "0.0.0"
 }
 
 func (w *Worker) commentAIResult(ctx context.Context, taskID string, result AIResult, developErr error) {
