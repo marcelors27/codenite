@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	codingLabel   = "Coding"
-	prOpenedLabel = "PR Opened"
+	codingLabel   = "ai:coding"
+	prOpenedLabel = "ai:pr-done"
 )
 
 type TodoistSource struct {
@@ -34,7 +34,7 @@ func NewTodoistSource(token, label, filter string) *TodoistSource {
 
 func NewTodoistSourceWithClient(label, filter string, client todoistClient) *TodoistSource {
 	if strings.TrimSpace(label) == "" && strings.TrimSpace(filter) == "" {
-		label = "ia:do"
+		label = "ai:do"
 	}
 	return &TodoistSource{
 		label: label,

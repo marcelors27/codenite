@@ -2,16 +2,17 @@
 
 Worker agent em Go que:
 
-- lê tasks do Todoist com label configurada (ex: `ia:do`)
+- lê tasks do Todoist com label configurada (ex: `ai:do`)
 - mapeia cada lista/projeto do Todoist para um repositório GitHub
 - baixa/atualiza o repositório
 - usa a API da OpenAI (modelo Codex) para implementar a task com leitura/edição de arquivos do repositório
 - quando há múltiplas tasks do mesmo repositório no mesmo polling, processa em lote em uma única chamada de IA
 - commit/push e abre PR automaticamente
 - se a task tiver label `@build`, o commit inclui `push-ver:{última_tag}` e `push-build:{último_build+1}`
-- adiciona label `Coding` ao iniciar e troca para `PR Opened` ao finalizar
-- comenta e fecha a task no Todoist (opcional)
-- evita reprocessamento no polling (ignora tasks com `Coding`/`PR Opened` e não processa o mesmo `task.ID` duas vezes no mesmo processo)
+- valida que o PR foi criado no GitHub
+- adiciona label `ai:coding` ao iniciar e troca para `ai:pr-done` ao finalizar
+- comenta e fecha as tasks relacionadas no Todoist
+- evita reprocessamento no polling (ignora tasks com `ai:coding`/`ai:pr-done` e não processa o mesmo `task.ID` duas vezes no mesmo processo)
 - salva em comentários da task apenas o summary da IA e os paths dos arquivos editados
 
 ## Requisitos
@@ -31,14 +32,13 @@ Crie `config.json`:
     "poll_interval_seconds": 60,
     "work_root": "/tmp/codenite-work",
     "dry_run": false,
-    "close_task_on_pr": true,
     "comment_on_task": true
   },
   "task_source": {
     "provider": "todoist",
     "todoist": {
       "token": "TODOIST_TOKEN",
-      "label": "ia:do"
+      "label": "ai:do"
     }
   },
   "ai": {
@@ -109,7 +109,7 @@ Isso facilita trocar o provedor de IA depois sem mexer no core do worker.
 Exemplo de `WORKER_CONFIG_JSON`:
 
 ```json
-{"worker":{"poll_interval_seconds":60,"work_root":"/tmp/codenite-work","dry_run":false,"close_task_on_pr":true,"comment_on_task":true},"task_source":{"provider":"todoist","todoist":{"token":"${TODOIST_TOKEN}","label":"ia:do"}},"ai":{"provider":"codex","model":"gpt-5.2-codex","env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}"}},"vcs":{"provider":"github","github":{"token":"${GITHUB_TOKEN}","draft":true}},"repositories":{"123456789":{"repo":"marcelors27/chroma-monorepo","base_branch":"main"}}}
+{"worker":{"poll_interval_seconds":60,"work_root":"/tmp/codenite-work","dry_run":false,"comment_on_task":true},"task_source":{"provider":"todoist","todoist":{"token":"${TODOIST_TOKEN}","label":"ai:do"}},"ai":{"provider":"codex","model":"gpt-5.2-codex","env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}"}},"vcs":{"provider":"github","github":{"token":"${GITHUB_TOKEN}","draft":true}},"repositories":{"123456789":{"repo":"marcelors27/chroma-monorepo","base_branch":"main"}}}
 ```
 
 Arquivo auxiliar com exemplo de env:

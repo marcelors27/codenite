@@ -96,14 +96,14 @@ func (w *Worker) processTaskBatch(ctx context.Context, repo RepoTarget, tasks []
 			removeLabel(
 				removeLabel(
 					removeLabel(task.Labels, w.cfg.TaskSource.Todoist.Label),
-					"Coding",
+					"ai:coding",
 				),
-				"PR Opened",
+				"ai:pr-done",
 			),
-			"Failed",
+			"ai:failed",
 		)
 		if err := w.taskSource.UpdateLabels(ctx, task.ID, failedLabels); err != nil {
-			log.Printf("task %s update labels (Failed) failed: %v", task.ID, err)
+			log.Printf("task %s update labels (ai:failed) failed: %v", task.ID, err)
 			return
 		}
 		task.Labels = failedLabels
@@ -133,9 +133,9 @@ func (w *Worker) processTaskBatch(ctx context.Context, repo RepoTarget, tasks []
 	}
 
 	for i := range tasks {
-		codingLabels := addLabel(removeLabel(removeLabel(tasks[i].Labels, w.cfg.TaskSource.Todoist.Label), "Failed"), "Coding")
+		codingLabels := addLabel(removeLabel(removeLabel(tasks[i].Labels, w.cfg.TaskSource.Todoist.Label), "ai:failed"), "ai:coding")
 		if err := w.taskSource.UpdateLabels(ctx, tasks[i].ID, codingLabels); err != nil {
-			log.Printf("task %s update labels (Coding) failed: %v", tasks[i].ID, err)
+			log.Printf("task %s update labels (ai:coding) failed: %v", tasks[i].ID, err)
 		}
 		tasks[i].Labels = codingLabels
 	}
@@ -183,9 +183,9 @@ func (w *Worker) processTaskBatch(ctx context.Context, repo RepoTarget, tasks []
 	}
 
 	for i := range tasks {
-		finalLabels := addLabel(removeLabel(tasks[i].Labels, "Coding"), "PR Opened")
+		finalLabels := addLabel(removeLabel(tasks[i].Labels, "ai:coding"), "ai:pr-done")
 		if err := w.taskSource.UpdateLabels(ctx, tasks[i].ID, finalLabels); err != nil {
-			log.Printf("task %s update labels (PR Opened) failed: %v", tasks[i].ID, err)
+			log.Printf("task %s update labels (ai:pr-done) failed: %v", tasks[i].ID, err)
 		}
 		tasks[i].Labels = finalLabels
 
@@ -196,10 +196,8 @@ func (w *Worker) processTaskBatch(ctx context.Context, repo RepoTarget, tasks []
 			}
 		}
 
-		if w.cfg.Worker.CloseTaskOnPR {
-			if err := w.taskSource.Close(ctx, tasks[i].ID); err != nil {
-				log.Printf("task %s close failed: %v", tasks[i].ID, err)
-			}
+		if err := w.taskSource.Close(ctx, tasks[i].ID); err != nil {
+			log.Printf("task %s close failed: %v", tasks[i].ID, err)
 		}
 	}
 

@@ -3,14 +3,13 @@
     "poll_interval_seconds": 60,
     "work_root": "/tmp/codenite-work",
     "dry_run": false,
-    "close_task_on_pr": true,
     "comment_on_task": true
   },
   "task_source": {
     "provider": "todoist",
     "todoist": {
       "token": "TODOIST_TOKEN",
-      "label": "ia:do"
+      "label": "ai:do"
     }
   },
   "ai": {

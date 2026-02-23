@@ -19,7 +19,6 @@ type WorkerConfig struct {
 	PollIntervalSeconds int    `json:"poll_interval_seconds"`
 	WorkRoot            string `json:"work_root"`
 	DryRun              bool   `json:"dry_run"`
-	CloseTaskOnPR       bool   `json:"close_task_on_pr"`
 	CommentOnTask       bool   `json:"comment_on_task"`
 }
 
@@ -86,7 +85,7 @@ func (c *Config) Validate() error {
 		return errors.New("task_source.todoist.token is required")
 	}
 	if c.TaskSource.Todoist.Label == "" && c.TaskSource.Todoist.Filter == "" {
-		c.TaskSource.Todoist.Label = "ia:do"
+		c.TaskSource.Todoist.Label = "ai:do"
 	}
 	if c.AI.Provider != "codex" {
 		return errors.New("ai.provider must be 'codex'")

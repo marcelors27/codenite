@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -201,15 +202,59 @@ func (g *GitHubProvider) OpenPullRequest(ctx context.Context, repoFullName, base
 	}
 
 	var parsed struct {
+		Number  int    `json:"number"`
 		HTMLURL string `json:"html_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return "", err
 	}
-	if parsed.HTMLURL == "" {
+	if parsed.Number <= 0 {
+		return "", fmt.Errorf("github create pr returned invalid number")
+	}
+	if err := g.validatePullRequest(ctx, repoFullName, parsed.Number); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(parsed.HTMLURL) == "" {
 		return "", fmt.Errorf("github create pr returned empty html_url")
 	}
 	return parsed.HTMLURL, nil
+}
+
+func (g *GitHubProvider) validatePullRequest(ctx context.Context, repoFullName string, number int) error {
+	u := fmt.Sprintf("%s/repos/%s/pulls/%s", githubAPIBase, repoFullName, strconv.Itoa(number))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		resBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("github validate pr failed status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(resBody)))
+	}
+
+	var parsed struct {
+		Number int    `json:"number"`
+		State  string `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return err
+	}
+	if parsed.Number != number {
+		return fmt.Errorf("github validate pr mismatch number=%d got=%d", number, parsed.Number)
+	}
+	if strings.TrimSpace(parsed.State) == "" {
+		return fmt.Errorf("github validate pr returned empty state")
+	}
+	return nil
 }
 
 func (g *GitHubProvider) checkoutBase(ctx context.Context, repoPath, baseBranch string) error {
